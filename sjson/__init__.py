@@ -10,8 +10,15 @@ import string
 import io
 from enum import Enum
 import typing
+from dataclasses import dataclass
 
 __version__ = '2.2.0'
+
+
+@dataclass
+class _Location:
+    line: int
+    column: int
 
 
 class _InputStream:
@@ -26,7 +33,7 @@ class _InputStream:
         pass
 
     @abstractmethod
-    def get_location(self) -> tuple[int, int]: ...
+    def get_location(self) -> _Location: ...
 
 
 class MemoryInputStream(_InputStream):
@@ -45,7 +52,7 @@ class MemoryInputStream(_InputStream):
         end_index = self._current_index + count
         if end_index > self._length:
             _raise_end_of_stream_exception(self)
-        result = self._stream[self._current_index : end_index]
+        result = self._stream[self._current_index: end_index]
         self._current_index = end_index
         return result
 
@@ -59,15 +66,14 @@ class MemoryInputStream(_InputStream):
                 return None
             _raise_end_of_stream_exception(self)
 
-        return self._stream[self._current_index : end_index]
+        return self._stream[self._current_index: end_index]
 
     def skip(self, count=1):
         """skip ``count`` bytes."""
         self._current_index += count
 
-    def get_location(self) -> tuple[int, int]:
+    def get_location(self) -> _Location:
         """Get the current location in the stream."""
-        loc = collections.namedtuple('loc', ['line', 'column'])
         bytes_read = self._stream[: self._current_index]
         line = 1
         column = 1
@@ -78,7 +84,7 @@ class MemoryInputStream(_InputStream):
                 column = 1
             else:
                 column += 1
-        return loc(line, column)
+        return _Location(line, column)
 
 
 class ByteBufferInputStream(_InputStream):
@@ -121,21 +127,20 @@ class ByteBufferInputStream(_InputStream):
         """skip ``count`` bytes."""
         self.read(count)
 
-    def get_location(self) -> tuple[int, int]:
+    def get_location(self) -> _Location:
         """Get the current location in the stream."""
-        loc = collections.namedtuple('loc', ['line', 'column'])
-        return loc(self._line, self._column)
+        return _Location(self._line, self._column)
 
 
 class ParseException(RuntimeError):
     """Parse exception."""
 
-    def __init__(self, msg: str, location: tuple[int, int]):
+    def __init__(self, msg: str, location: _Location):
         super(ParseException, self).__init__(msg)
         self._msg = msg
         self._location = location
 
-    def get_location(self) -> tuple[int, int]:
+    def get_location(self) -> _Location:
         """Get the current location at which the exception occurred."""
         return self._location
 
@@ -154,12 +159,14 @@ def _consume(stream: _InputStream, what: bytes):
     what_len = len(what)
     if stream.peek(what_len) != what:
         raise ParseException(
-            "Expected to read '{}'".format(what.decode('utf-8')), stream.get_location()
+            "Expected to read '{}'".format(what.decode('utf-8')),
+            stream.get_location()
         )
     stream.skip(what_len)
 
 
-def _skip_characters_and_whitespace(stream: _InputStream, num_char_to_skip: int):
+def _skip_characters_and_whitespace(stream: _InputStream,
+                                    num_char_to_skip: int):
     stream.skip(num_char_to_skip)
     return _skip_whitespace(stream)
 
@@ -191,7 +198,8 @@ def _skip_c_style_comment(stream: _InputStream):
                 stream.skip()
         elif next_char is None:
             raise ParseException(
-                "Could not find closing '*/' for comment", comment_start_location
+                "Could not find closing '*/' for comment",
+                comment_start_location
             )
         stream.skip()
 
@@ -304,18 +312,19 @@ def _decode_string(stream: _InputStream, allow_identifier=False):
                 and stream.peek(3) == b'"""'
             ):
                 # This is a tricky case -- we're in a """ quoted string, and
-                # we spotted three consecutive """. This could mean we're at the
-                # end, but it doesn't have to be -- we actually need to check
-                # all the cases below:
+                # we spotted three consecutive """. This could mean we're at
+                # the end, but it doesn't have to be -- we actually need to
+                # check all the cases below:
                 #   * """: simple case, just end here
                 #   * """": A single quote inside the string,
                 #     followed by the end marker
                 #   * """"": A double double quote inside the string,
                 #     followed by the end marker
                 # Note that """""" is invalid, no matter what follows
-                # afterwards, as the first group of three terminates the string,
-                # and then we'd have an unrelated string afterwards. We don't
-                # concat strings automatically so this will trigger an error
+                # afterwards, as the first group of three terminates the
+                # string, and then we'd have an unrelated string afterwards. We
+                # don't concat strings automatically so this will trigger an
+                # error
                 # Start with longest match, as the other is prefix this has
                 # to be the first check
                 if stream.peek(5, allow_end_of_stream=True) == b'"""""':
@@ -357,7 +366,8 @@ def _decode_string(stream: _InputStream, allow_identifier=False):
 _NUMBER_SEPARATOR_SET = _WHITESPACE_SET.union({b',', b']', b'}', None})
 
 
-def _decode_number(stream: _InputStream, next_char):
+def _decode_number(stream: _InputStream,
+                   next_char: bytes | None) -> float | int:
     """Parse a number.
 
     next_char -- the next byte in the stream.
@@ -365,7 +375,7 @@ def _decode_number(stream: _InputStream, next_char):
     number_bytes = bytearray()
     is_decimal_number = False
 
-    while True:
+    while next_char := stream.peek(allow_end_of_stream=True):
         if next_char in _NUMBER_SEPARATOR_SET:
             break
 
@@ -374,8 +384,6 @@ def _decode_number(stream: _InputStream, next_char):
 
         number_bytes += next_char
         stream.skip()
-
-        next_char = stream.peek(allow_end_of_stream=True)
 
     value = number_bytes.decode('utf-8')
 
@@ -558,8 +566,9 @@ def _encode(
     match obj:
         case None:
             yield 'null'
-        # Must check for true, false before number, as boolean is an instance of
-        # Number, and str(obj) would return True/False instead of true/false then
+        # Must check for true, false before number, as boolean is an instance
+        # of Number, and str(obj) would return True/False instead of true/false
+        # in that case
         case True:
             yield 'true'
         case False:
